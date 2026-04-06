@@ -1,7 +1,7 @@
 import voluptuous as vol
 from homeassistant.config_entries import (ConfigFlow, OptionsFlow)
 from .const import DOMAIN, CONFIG_VERSION, DEFAULT_INTERVAL_POLL, DEFAULT_INTERVAL_CHARGING, DEFAULT_INTERVAL_STATISTICS, DEFAULT_INTERVAL_FETCH, DEFAULT_REGION, REGIONS
-from .kamereon import NCISession
+from .kamereon import NCISession, AuthenticationError
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers import selector
 from homeassistant.const import CONF_PASSWORD
@@ -57,7 +57,7 @@ class NissanConfigFlow(ConfigFlow, domain=DOMAIN):
                                                        info["email"],
                                                        info[CONF_PASSWORD]
                                                        )
-            except:
+            except (AuthenticationError, RuntimeError):
                 errors["base"] = "auth_error"
 
             if len(errors) == 0:
@@ -77,12 +77,14 @@ class NissanConfigFlow(ConfigFlow, domain=DOMAIN):
         return NissanOptionsFlow(entry)
 
     async def async_step_reauth(self, entry_data):
+        """Start reauthentication flow for an existing config entry."""
         self._reauth_entry = self.hass.config_entries.async_get_entry(
             self.context["entry_id"]
         )
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(self, user_input=None):
+        """Handle credential confirmation during reauthentication."""
         errors = {}
 
         if user_input is not None:
@@ -93,7 +95,7 @@ class NissanConfigFlow(ConfigFlow, domain=DOMAIN):
                     self._reauth_entry.data["email"],
                     user_input[CONF_PASSWORD],
                 )
-            except Exception:
+            except (AuthenticationError, RuntimeError):
                 errors["base"] = "auth_error"
 
             if not errors:
@@ -131,13 +133,13 @@ class NissanOptionsFlow(OptionsFlow):
                                                            self._config_entry.data.get("email"),
                                                            options[CONF_PASSWORD]
                                                            )
-                except:
+                except (AuthenticationError, RuntimeError):
                     errors["base"] = "auth_error"
 
             # If we have no errors, update the data array
             if len(errors) == 0:
                 # If password not provided, dont take the new details
-                if not CONF_PASSWORD in options:
+                if CONF_PASSWORD not in options:
                     options.pop('email', None)
                     options.pop(CONF_PASSWORD, None)
                 else:

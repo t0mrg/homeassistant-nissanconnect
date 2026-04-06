@@ -58,9 +58,12 @@ async def async_setup_entry(hass, entry):
     else:
         raise ConfigEntryAuthFailed("Token reauthentication required")
 
-    # Persist any refreshed token values
+    # Persist any refreshed token values.
+    # Non-dict token payloads are treated as empty to avoid persisting malformed state.
     new_token = kamereon_session.token
-    if new_token and new_token != token:
+    previous_token = token if isinstance(token, dict) else {}
+    current_token = new_token if isinstance(new_token, dict) else {}
+    if current_token and current_token != previous_token:
         updated_data = dict(config)
         updated_data["token"] = new_token
         hass.config_entries.async_update_entry(entry, data=updated_data)

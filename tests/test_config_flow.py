@@ -3,6 +3,7 @@ from unittest import mock
 import pytest
 
 from custom_components.nissan_connect import config_flow
+from custom_components.nissan_connect.kamereon.kamereon import AuthenticationError
 from custom_components.nissan_connect.const import DOMAIN
 from homeassistant import data_entry_flow
 from custom_components.nissan_connect.const import DOMAIN, DEFAULT_REGION
@@ -88,7 +89,29 @@ async def test_step_user_submit(hass, mock_kamereon_session):
 
 async def test_step_user_invalid_auth(hass, mock_kamereon_session):
     """Test the user step with invalid credentials."""
-    mock_kamereon_session.return_value.login.side_effect = Exception("Invalid credentials")
+    mock_kamereon_session.return_value.login.side_effect = RuntimeError("Invalid credentials")
+
+    result = await hass.config_entries.flow.async_init(
+        config_flow.DOMAIN, context={"source": "user"}
+    )
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            "email": "test@example.com",
+            "password": "wrongpassword",
+            "region": DEFAULT_REGION.lower(),
+            "imperial_distance": False
+        }
+    )
+
+    assert result["type"] == data_entry_flow.RESULT_TYPE_FORM
+    assert result["errors"] == {"base": "auth_error"}
+
+
+async def test_step_user_invalid_authentication_error(hass, mock_kamereon_session):
+    """Test the user step with auth-specific failure."""
+    mock_kamereon_session.return_value.login.side_effect = AuthenticationError("Invalid credentials")
 
     result = await hass.config_entries.flow.async_init(
         config_flow.DOMAIN, context={"source": "user"}

@@ -9,6 +9,7 @@ from typing import List
 import requests
 import time
 from oauthlib.common import generate_nonce
+from oauthlib.oauth2.rfc6749.errors import OAuth2Error
 from oauthlib.oauth2 import TokenExpiredError
 from requests_oauthlib import OAuth2Session
 from .kamereon_const import *
@@ -28,7 +29,11 @@ NotificationType = collections.namedtuple('NotificationType', ['key', 'title', '
 NotificationCategory = collections.namedtuple('Category', ['key', 'title'])
 
 class AuthenticationError(RuntimeError):
-    """Raised when OAuth authentication cannot continue without reauth."""
+    """Raised when OAuth authentication cannot continue without reauth.
+
+    This includes missing OAuth token state, missing refresh token, and
+    refresh-token exchange failures.
+    """
 
 class Notification:
 
@@ -135,10 +140,13 @@ class KamereonSession:
                 client_secret=self.settings['client_secret'],
                 include_client_id=True
             )
-        except Exception as ex:
+        except (OAuth2Error, requests.exceptions.RequestException, ValueError) as ex:
             raise AuthenticationError("Token refresh failed, reauthentication required.") from ex
 
-    def login(self, username, password):
+    def login(self, username=None, password=None):
+        if username is None or password is None:
+            raise AuthenticationError("Username and password are required for login.")
+
         # Reset session
         self.session = requests.session()
 

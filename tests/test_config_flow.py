@@ -55,6 +55,10 @@ async def test_step_user_init(hass):
 async def test_step_user_submit(hass, mock_kamereon_session):
     """Test the user step with valid credentials."""
     mock_kamereon_session.return_value.login.return_value = True
+    mock_kamereon_session.return_value.token = {
+        "access_token": "token",
+        "refresh_token": "refresh-token"
+    }
 
     result = await hass.config_entries.flow.async_init(
         config_flow.DOMAIN, context={"source": "user"}
@@ -74,9 +78,12 @@ async def test_step_user_submit(hass, mock_kamereon_session):
     assert result["title"] == "test@example.com"
     assert result["data"] == {
         "email": "test@example.com",
-        "password": "password123",
         "region": DEFAULT_REGION,
-        "imperial_distance": False
+        "imperial_distance": False,
+        "token": {
+            "access_token": "token",
+            "refresh_token": "refresh-token"
+        }
     }
 
 async def test_step_user_invalid_auth(hass, mock_kamereon_session):

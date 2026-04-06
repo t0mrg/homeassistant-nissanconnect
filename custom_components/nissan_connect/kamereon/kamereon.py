@@ -4,7 +4,6 @@
 import collections
 import datetime
 import json
-import os
 import logging
 from typing import List
 import requests
@@ -27,6 +26,9 @@ _registry = {
 
 NotificationType = collections.namedtuple('NotificationType', ['key', 'title', 'message', 'category'])
 NotificationCategory = collections.namedtuple('Category', ['key', 'title'])
+
+class AuthenticationError(RuntimeError):
+    """Raised when OAuth authentication cannot continue without reauth."""
 
 class Notification:
 
@@ -94,19 +96,49 @@ class KamereonSession:
         self._oauth = None
         self._user_id = None
         self.unique_id = unique_id
-        # ugly hack
-        os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+        self._oauth_token_url = '{}oauth2/{}/access_token'.format(
+            self.settings['auth_base_url'],
+            self.settings['realm']
+        )
 
-    def login(self, username=None, password=None):
-        if username is not None and password is not None:
-            # Cache credentials
-            self._username = username
-            self._password = password
-        else:
-            # Use cached credentials
-            username = self._username
-            password = self._password
-        
+    def _create_oauth_session(self, token=None):
+        return OAuth2Session(
+            client_id=self.settings['client_id'],
+            redirect_uri=self.settings['redirect_uri'],
+            scope=self.settings['scope'],
+            token=token
+        )
+
+    @property
+    def token(self):
+        if self._oauth is None or self._oauth.token is None:
+            return None
+        return dict(self._oauth.token)
+
+    @token.setter
+    def token(self, token):
+        self._oauth = self._create_oauth_session(token=token)
+
+    def refresh_access_token(self):
+        if self._oauth is None or self._oauth.token is None:
+            raise AuthenticationError("No OAuth token set, you need to reauthenticate.")
+
+        refresh_token = self._oauth.token.get("refresh_token")
+        if not refresh_token:
+            raise AuthenticationError("No refresh token available, reauthentication required.")
+
+        try:
+            self._oauth.refresh_token(
+                self._oauth_token_url,
+                refresh_token=refresh_token,
+                client_id=self.settings['client_id'],
+                client_secret=self.settings['client_secret'],
+                include_client_id=True
+            )
+        except Exception as ex:
+            raise AuthenticationError("Token refresh failed, reauthentication required.") from ex
+
+    def login(self, username, password):
         # Reset session
         self.session = requests.session()
 
@@ -168,17 +200,10 @@ class KamereonSession:
             allow_redirects=False)
         oauth_authorize_url = resp.headers['location']
 
-        oauth_token_url = '{}oauth2/{}/access_token'.format(
-            self.settings['auth_base_url'],
-            self.settings['realm']
-            )
-        self._oauth = OAuth2Session(
-            client_id=self.settings['client_id'],
-            redirect_uri=self.settings['redirect_uri'],
-            scope=self.settings['scope'])
+        self._oauth = self._create_oauth_session()
         self._oauth._client.nonce = nonce
         self._oauth.fetch_token(
-            oauth_token_url,
+            self._oauth_token_url,
             authorization_response=oauth_authorize_url,
             client_secret=self.settings['client_secret'],
             include_client_id=True)
@@ -328,8 +353,8 @@ class Vehicle:
                 return resp
 
             except TokenExpiredError:
-                _LOGGER.debug("Token expired. Refreshing session and retrying.")
-                self.session.login()
+                _LOGGER.debug("Token expired. Refreshing token and retrying.")
+                self.session.refresh_access_token()
             except Exception as e:
                 _LOGGER.debug(f"Request failed on attempt {attempt + 1} of {max_retries}: {e}")
                 if attempt == max_retries - 1:  # Exhausted retries

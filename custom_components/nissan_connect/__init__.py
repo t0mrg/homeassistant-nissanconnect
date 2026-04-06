@@ -1,8 +1,9 @@
 import logging
 from datetime import timedelta
-from .kamereon import NCISession
+from .kamereon import NCISession, AuthenticationError
 from .coordinator import KamereonFetchCoordinator, KamereonPollCoordinator, StatisticsCoordinator
 from .const import *
+from homeassistant.exceptions import ConfigEntryAuthFailed
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -18,10 +19,7 @@ async def async_update_listener(hass, entry):
 
     # Loop each vehicle and update its session with the new credentials
     for vehicle in hass.data[DOMAIN][account_id][DATA_VEHICLES]:
-        await hass.async_add_executor_job(hass.data[DOMAIN][account_id][DATA_VEHICLES][vehicle].session.login,
-                                            config.get("email"),
-                                            config.get("password")
-                                            )
+        hass.data[DOMAIN][account_id][DATA_VEHICLES][vehicle].session.token = config.get("token")
 
     # Update intervals for coordinators
     hass.data[DOMAIN][account_id][DATA_COORDINATOR_STATISTICS].update_interval = timedelta(minutes=config.get("interval_statistics", DEFAULT_INTERVAL_STATISTICS))
@@ -50,10 +48,25 @@ async def async_setup_entry(hass, entry):
     }
 
     _LOGGER.info("Logging in to service")
-    await hass.async_add_executor_job(kamereon_session.login,
-                                      config.get("email"),
-                                      config.get("password")
-                                      )
+    token = config.get("token")
+    if token:
+        kamereon_session.token = token
+        try:
+            await hass.async_add_executor_job(kamereon_session.refresh_access_token)
+        except AuthenticationError as ex:
+            raise ConfigEntryAuthFailed("Token reauthentication required") from ex
+    else:
+        raise ConfigEntryAuthFailed("Token reauthentication required")
+
+    # Persist any refreshed token values.
+    # Non-dict token payloads are treated as empty to avoid persisting malformed state.
+    new_token = kamereon_session.token
+    previous_token = token if isinstance(token, dict) else {}
+    current_token = new_token if isinstance(new_token, dict) else {}
+    if current_token and current_token != previous_token:
+        updated_data = dict(config)
+        updated_data["token"] = new_token
+        hass.config_entries.async_update_entry(entry, data=updated_data)
 
     _LOGGER.debug("Finding vehicles")
     for vehicle in await hass.async_add_executor_job(kamereon_session.fetch_vehicles):

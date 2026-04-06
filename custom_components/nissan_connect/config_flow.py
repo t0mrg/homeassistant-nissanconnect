@@ -1,13 +1,14 @@
 import voluptuous as vol
 from homeassistant.config_entries import (ConfigFlow, OptionsFlow)
 from .const import DOMAIN, CONFIG_VERSION, DEFAULT_INTERVAL_POLL, DEFAULT_INTERVAL_CHARGING, DEFAULT_INTERVAL_STATISTICS, DEFAULT_INTERVAL_FETCH, DEFAULT_REGION, REGIONS
-from .kamereon import NCISession
+from .kamereon import NCISession, AuthenticationError
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers import selector
+from homeassistant.const import CONF_PASSWORD
 
 USER_SCHEMA = vol.Schema({
     vol.Required("email"): cv.string,
-    vol.Required("password"): cv.string,
+    vol.Required(CONF_PASSWORD): cv.string,
     # vol.Required(
     #     "interval", default=DEFAULT_INTERVAL_POLL
     # ): int,
@@ -36,6 +37,7 @@ USER_SCHEMA = vol.Schema({
 class NissanConfigFlow(ConfigFlow, domain=DOMAIN):
     """Config flow."""
     VERSION = CONFIG_VERSION
+    _reauth_entry = None
 
     async def async_step_user(self, info):
         errors = {}
@@ -53,15 +55,18 @@ class NissanConfigFlow(ConfigFlow, domain=DOMAIN):
             try:
                 await self.hass.async_add_executor_job(kamereon_session.login,
                                                        info["email"],
-                                                       info["password"]
+                                                       info[CONF_PASSWORD]
                                                        )
-            except:
+            except (AuthenticationError, RuntimeError):
                 errors["base"] = "auth_error"
 
             if len(errors) == 0:
+                data = dict(info)
+                data.pop(CONF_PASSWORD, None)
+                data["token"] = kamereon_session.token
                 return self.async_create_entry(
                     title=info["email"],
-                    data=info
+                    data=data
                 )
 
         return self.async_show_form(
@@ -70,6 +75,41 @@ class NissanConfigFlow(ConfigFlow, domain=DOMAIN):
 
     def async_get_options_flow(entry):
         return NissanOptionsFlow(entry)
+
+    async def async_step_reauth(self, entry_data):
+        """Start reauthentication flow for an existing config entry."""
+        self._reauth_entry = self.hass.config_entries.async_get_entry(
+            self.context["entry_id"]
+        )
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input=None):
+        """Handle credential confirmation during reauthentication."""
+        errors = {}
+
+        if user_input is not None:
+            kamereon_session = NCISession(region=self._reauth_entry.data["region"])
+            try:
+                await self.hass.async_add_executor_job(
+                    kamereon_session.login,
+                    self._reauth_entry.data["email"],
+                    user_input[CONF_PASSWORD],
+                )
+            except (AuthenticationError, RuntimeError):
+                errors["base"] = "auth_error"
+
+            if not errors:
+                data = dict(self._reauth_entry.data)
+                data["token"] = kamereon_session.token
+                self.hass.config_entries.async_update_entry(self._reauth_entry, data=data)
+                await self.hass.config_entries.async_reload(self._reauth_entry.entry_id)
+                return self.async_abort(reason="reauth_successful")
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema({vol.Required(CONF_PASSWORD): cv.string}),
+            errors=errors,
+        )
 
 
 class NissanOptionsFlow(OptionsFlow):
@@ -87,21 +127,24 @@ class NissanOptionsFlow(OptionsFlow):
             kamereon_session = NCISession(
                 region=data["region"]
             )
-            if "password" in options:
+            if CONF_PASSWORD in options:
                 try:
                     await self.hass.async_add_executor_job(kamereon_session.login,
                                                            self._config_entry.data.get("email"),
-                                                           options["password"]
+                                                           options[CONF_PASSWORD]
                                                            )
-                except:
+                except (AuthenticationError, RuntimeError):
                     errors["base"] = "auth_error"
 
             # If we have no errors, update the data array
             if len(errors) == 0:
                 # If password not provided, dont take the new details
-                if not "password" in options:
+                if CONF_PASSWORD not in options:
                     options.pop('email', None)
-                    options.pop('password', None)
+                    options.pop(CONF_PASSWORD, None)
+                else:
+                    options.pop(CONF_PASSWORD, None)
+                    options["token"] = kamereon_session.token
 
                 # Update data
                 data.update(options)
@@ -118,7 +161,7 @@ class NissanOptionsFlow(OptionsFlow):
         return self.async_show_form(
             step_id="init", data_schema=vol.Schema({
                 # vol.Required("email", default=self._config_entry.data.get("email", "")): cv.string,
-                vol.Optional("password"): cv.string,
+                vol.Optional(CONF_PASSWORD): cv.string,
                 vol.Required(
                     "interval", default=self._config_entry.data.get("interval", DEFAULT_INTERVAL_POLL)
                 ): int,

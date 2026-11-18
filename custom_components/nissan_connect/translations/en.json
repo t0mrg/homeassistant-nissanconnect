@@ -24,7 +24,9 @@
         "auth_error": "Invalid credentials provided.",
         "region_error": "Invalid region provided. Please provide a valid region."
       },
-      "abort": {}
+      "abort": {
+        "reauth_successful": "Re-authentication was successful."
+      }
     },
     "options": {
       "step": {
